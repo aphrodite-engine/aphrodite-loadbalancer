@@ -30,7 +30,7 @@ endpoints:
 Then run the load balancer with:
 
 ```bash
-aphrodite-loadbalancer --config config.yaml
+aphrodite-loadbalancer config.yaml
 ```
 
 ### Configuration
