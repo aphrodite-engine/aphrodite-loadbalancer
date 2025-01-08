@@ -1,6 +1,5 @@
 import random
 from itertools import cycle
-from typing import Dict, List, Union
 
 import aiohttp
 import yaml
