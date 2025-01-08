@@ -1,13 +1,16 @@
-import pytest
-import aiohttp
-from aiohttp import web
-from src.loadbalancer import LoadBalancer
-import yaml
 import os
+import socket
 import tempfile
 from itertools import cycle
+
+import aiohttp
+import pytest
 import pytest_asyncio
-import socket
+import yaml
+from aiohttp import web
+
+from aphrodite_loadbalancer.loadbalancer import LoadBalancer
+
 
 def create_test_config(endpoints):
     config = {'endpoints': endpoints}
