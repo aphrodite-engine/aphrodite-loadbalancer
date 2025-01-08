@@ -1,7 +1,6 @@
-import os
+import asyncio
 import socket
 import tempfile
-from itertools import cycle
 
 import aiohttp
 import pytest
@@ -21,11 +20,11 @@ def create_test_config(endpoints):
 class DummyEndpoint:
     def __init__(self, name, weight=1):
         self.name = name
+        self.weight = weight
         self.request_count = 0
         self.last_request = None
         self.should_fail = False
-        self.last_request = None
-        self.weight = weight
+        self.is_healthy = True
 
 class MockLoadBalancer(LoadBalancer):
     def __init__(self, endpoints):
@@ -34,7 +33,9 @@ class MockLoadBalancer(LoadBalancer):
         self.weights = [endpoint.weight for endpoint in endpoints]
         self.request_count = 0
         self.client_session = None
-        
+        self.unhealthy_endpoints = set()
+        self.health_check_interval = 1
+        self.health_check_timeout = 1
         self._create_weighted_cycles()
 
     async def handle_request(self, request: web.Request) -> web.StreamResponse:
@@ -61,12 +62,20 @@ class MockLoadBalancer(LoadBalancer):
         }
 
         if endpoint.should_fail:
-            raise web.HTTPInternalServerError(text="Simulated failure")
+            return web.Response(
+                status=500,
+                text="Simulated failure",
+                headers=cors_headers
+            )
 
         return web.Response(
             text=f"Response from {endpoint.name}",
             headers=cors_headers
         )
+
+    async def health_check(self, endpoint: str) -> bool:
+        index = self.endpoints.index(endpoint)
+        return self.dummy_endpoints[index].is_healthy
 
 def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -158,3 +167,66 @@ async def test_weighted_distribution(load_balancer):
 
         assert abs(actual_ratio - weight_ratio) < 0.1, \
             f"Expected ratio around {weight_ratio}, got {actual_ratio}"
+
+
+@pytest.mark.asyncio
+async def test_health_check_unhealthy_endpoint(load_balancer):
+    lb, endpoints, port = load_balancer
+
+    endpoints[0].is_healthy = False
+
+    await asyncio.sleep(2)
+
+    async with aiohttp.ClientSession() as session:
+        for _ in range(5):
+            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+                assert resp.status == 200
+                await resp.text()
+
+    assert endpoints[0].request_count == 0, "Unhealthy endpoint should receive no requests"
+    assert endpoints[1].request_count == 5, "All requests should go to healthy endpoint"
+
+@pytest.mark.asyncio
+async def test_health_check_recovery(load_balancer):
+    lb, endpoints, port = load_balancer
+
+    endpoints[0].is_healthy = False
+    await asyncio.sleep(2)
+
+    async with aiohttp.ClientSession() as session:
+        for _ in range(3):
+            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+                assert resp.status == 200
+                await resp.text()
+
+    endpoints[0].is_healthy = True
+    await asyncio.sleep(2)
+
+    endpoints[0].request_count = 0
+    endpoints[1].request_count = 0
+
+    async with aiohttp.ClientSession() as session:
+        for _ in range(4):
+            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+                assert resp.status == 200
+                await resp.text()
+
+    assert endpoints[0].request_count > 0, "Recovered endpoint should receive requests"
+    assert endpoints[1].request_count > 0, "Previously healthy endpoint should still receive requests"
+
+@pytest.mark.asyncio
+async def test_all_endpoints_unhealthy(load_balancer):
+    lb, endpoints, port = load_balancer
+
+    for endpoint in endpoints:
+        endpoint.is_healthy = False
+    
+    await asyncio.sleep(2)
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f'http://localhost:{port}/v1/models') as resp:
+            assert resp.status == 200
+            await resp.text()
+
+    total_requests = sum(endpoint.request_count for endpoint in endpoints)
+    assert total_requests > 0, "Requests should be processed even when all endpoints are unhealthy"

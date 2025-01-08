@@ -1,5 +1,7 @@
+import asyncio
 import random
 from itertools import cycle
+from typing import Set
 
 import aiohttp
 import yaml
@@ -25,15 +27,54 @@ class LoadBalancer:
         self.request_count = 0
         self.client_session = None
 
+        self.health_check_interval = config.get('health_check_interval', 30)
+        self.unhealthy_endpoints: Set[int] = set()
+        self.health_check_timeout = config.get('health_check_timeout', 2)
+
         self._create_weighted_cycles()
 
+    async def health_check(self, endpoint: str) -> bool:
+        try:
+            assert self.client_session is not None
+            async with self.client_session.get(
+                f"{endpoint}/health",
+                timeout=self.health_check_timeout
+            ) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    async def monitor_health(self):
+        """Continuously monitor endpoint health"""
+        while True:
+            for i, endpoint in enumerate(self.endpoints):
+                was_healthy = i not in self.unhealthy_endpoints
+                is_healthy = await self.health_check(endpoint)
+                
+                if not is_healthy and was_healthy:
+                    print(f"[Health] Endpoint {endpoint} is down")
+                    self.unhealthy_endpoints.add(i)
+                    self._create_weighted_cycles()
+                elif is_healthy and not was_healthy:
+                    print(f"[Health] Endpoint {endpoint} is back up")
+                    self.unhealthy_endpoints.remove(i)
+                    self._create_weighted_cycles()
+
+            await asyncio.sleep(self.health_check_interval)
+
     def _create_weighted_cycles(self):
-        """Create weighted index cycles for load balancing"""
+        """Create weighted index cycles for load balancing, excluding unhealthy endpoints"""
         weighted_indices = []
         for i, weight in enumerate(self.weights):
-            weighted_indices.extend([i] * weight)
-        random.shuffle(weighted_indices)
+            if i not in self.unhealthy_endpoints:
+                weighted_indices.extend([i] * weight)
 
+        if not weighted_indices:
+            print("WARNING: All endpoints are unhealthy!")
+            weighted_indices = list(range(len(self.endpoints)))
+            
+        random.shuffle(weighted_indices)
+        
         self.completion_cycle = cycle(weighted_indices.copy())
         self.general_cycle = cycle(weighted_indices.copy())
 
@@ -41,6 +82,8 @@ class LoadBalancer:
         self.client_session = aiohttp.ClientSession()
         app = web.Application()
         app.router.add_route('*', '/{tail:.*}', self.handle_request)
+
+        self._health_monitor_task = asyncio.create_task(self.monitor_health())
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -96,9 +139,16 @@ class LoadBalancer:
                 return response
 
         except Exception as e:
-            print(f"Error occurred: {str(e)}")
+            print(f"Request failed: {str(e)}")
             raise
 
     async def cleanup(self):
+        if hasattr(self, '_health_monitor_task'):
+            self._health_monitor_task.cancel()
+            try:
+                await self._health_monitor_task
+            except asyncio.CancelledError:
+                pass
+
         if self.client_session:
             await self.client_session.close()
