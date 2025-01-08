@@ -19,21 +19,23 @@ def create_test_config(endpoints):
         return f.name
 
 class DummyEndpoint:
-    def __init__(self, name):
+    def __init__(self, name, weight=1):
         self.name = name
         self.request_count = 0
         self.last_request = None
         self.should_fail = False
         self.last_request = None
+        self.weight = weight
 
 class MockLoadBalancer(LoadBalancer):
     def __init__(self, endpoints):
         self.endpoints = [f"http://dummy{i}" for i in range(len(endpoints))]
         self.dummy_endpoints = endpoints
-        self.endpoint_cycle = cycle(range(len(self.endpoints)))
-        self.completion_cycle = cycle(range(len(self.endpoints)))
-        self.general_cycle = cycle(range(len(self.endpoints)))
+        self.weights = [endpoint.weight for endpoint in endpoints]
+        self.request_count = 0
         self.client_session = None
+        
+        self._create_weighted_cycles()
 
     async def handle_request(self, request: web.Request) -> web.StreamResponse:
         cors_headers = {
@@ -76,7 +78,7 @@ def get_free_port():
 @pytest_asyncio.fixture
 async def load_balancer():
     port = get_free_port()
-    dummy_endpoints = [DummyEndpoint("endpoint1"), DummyEndpoint("endpoint2")]
+    dummy_endpoints = [DummyEndpoint("endpoint1", weight=1), DummyEndpoint("endpoint2", weight=1)]
     lb = MockLoadBalancer(dummy_endpoints)
     await lb.start(port)
     try:
@@ -133,3 +135,26 @@ async def test_error_handling(load_balancer):
         endpoints[0].should_fail = True
         async with session.get(f'http://localhost:{port}/v1/models') as resp:
             assert resp.status == 500
+
+
+@pytest.mark.asyncio
+async def test_weighted_distribution(load_balancer):
+    lb, endpoints, port = load_balancer
+
+    endpoints[0].weight = 2
+    endpoints[1].weight = 1
+    lb.weights = [endpoint.weight for endpoint in endpoints]
+    lb._create_weighted_cycles()
+
+    async with aiohttp.ClientSession() as session:
+        num_requests = 100
+        for _ in range(num_requests):
+            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+                assert resp.status == 200
+
+        total_requests = endpoints[0].request_count + endpoints[1].request_count
+        weight_ratio = endpoints[0].weight / (endpoints[0].weight + endpoints[1].weight)
+        actual_ratio = endpoints[0].request_count / total_requests
+
+        assert abs(actual_ratio - weight_ratio) < 0.1, \
+            f"Expected ratio around {weight_ratio}, got {actual_ratio}"
