@@ -15,10 +15,15 @@ class LoadBalancer:
 
         self.endpoints = []
         self.weights = []
-        for endpoint in config['endpoints']:
+        self.path_routes = {}
+        
+        for i, endpoint in enumerate(config['endpoints']):
             if isinstance(endpoint, dict):
                 self.endpoints.append(endpoint['url'])
                 self.weights.append(endpoint.get('weight', 1))
+                if 'paths' in endpoint:
+                    for path in endpoint['paths']:
+                        self.path_routes[path] = i
             else:
                 self.endpoints.append(endpoint)
                 self.weights.append(1)
@@ -104,10 +109,15 @@ class LoadBalancer:
         if request.method == 'OPTIONS':
             return web.Response(headers=cors_headers)
 
-        if request.path == '/v1/completions':
-            endpoint_index = next(self.completion_cycle)
+        if request.path in self.path_routes:
+            endpoint_index = self.path_routes[request.path]
+            if endpoint_index in self.unhealthy_endpoints:
+                endpoint_index = next(self.general_cycle)
         else:
-            endpoint_index = next(self.general_cycle)
+            if request.path == '/v1/completions':
+                endpoint_index = next(self.completion_cycle)
+            else:
+                endpoint_index = next(self.general_cycle)
         target_url = self.endpoints[endpoint_index]
 
         path = request.path

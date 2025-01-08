@@ -1,6 +1,9 @@
+port: 2222
 endpoints:
   - url: "http://localhost:2242"
-    weight: 1
-  - url: "http://localhost:2243"
     weight: 2
-port: 2222
+  - url: "http://localhost:2243"
+    weight: 1
+  - url: "http://localhost:2244"
+    paths: ["/v1/tokenize", "/v1/detokenize"]
+    weight: 1

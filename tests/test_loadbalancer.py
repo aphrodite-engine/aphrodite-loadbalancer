@@ -1,6 +1,7 @@
 import asyncio
 import socket
 import tempfile
+from itertools import cycle
 
 import aiohttp
 import pytest
@@ -31,12 +32,27 @@ class MockLoadBalancer(LoadBalancer):
         self.endpoints = [f"http://dummy{i}" for i in range(len(endpoints))]
         self.dummy_endpoints = endpoints
         self.weights = [endpoint.weight for endpoint in endpoints]
+        self.path_routes = {}
         self.request_count = 0
         self.client_session = None
         self.unhealthy_endpoints = set()
         self.health_check_interval = 1
         self.health_check_timeout = 1
         self._create_weighted_cycles()
+
+    def _create_weighted_cycles(self):
+        """Create weighted index cycles for load balancing, excluding unhealthy endpoints"""
+        weighted_indices = []
+        for i, weight in enumerate(self.weights[:2]):
+            if i not in self.unhealthy_endpoints:
+                weighted_indices.extend([i] * weight)
+
+        if not weighted_indices:
+            print("WARNING: All endpoints are unhealthy!")
+            weighted_indices = list(range(min(2, len(self.endpoints))))
+
+        self.completion_cycle = cycle(weighted_indices)
+        self.general_cycle = cycle(weighted_indices)
 
     async def handle_request(self, request: web.Request) -> web.StreamResponse:
         cors_headers = {
@@ -48,10 +64,15 @@ class MockLoadBalancer(LoadBalancer):
         if request.method == 'OPTIONS':
             return web.Response(headers=cors_headers)
 
-        if request.path == '/v1/completions':
-            endpoint_index = next(self.completion_cycle)
+        if request.path in self.path_routes:
+            endpoint_index = self.path_routes[request.path]
+            if endpoint_index in self.unhealthy_endpoints:
+                endpoint_index = next(self.general_cycle)
         else:
-            endpoint_index = next(self.general_cycle)
+            if request.path == '/v1/completions':
+                endpoint_index = next(self.completion_cycle)
+            else:
+                endpoint_index = next(self.general_cycle)
 
         endpoint = self.dummy_endpoints[endpoint_index]
         endpoint.request_count += 1
@@ -87,7 +108,11 @@ def get_free_port():
 @pytest_asyncio.fixture
 async def load_balancer():
     port = get_free_port()
-    dummy_endpoints = [DummyEndpoint("endpoint1", weight=1), DummyEndpoint("endpoint2", weight=1)]
+    dummy_endpoints = [
+        DummyEndpoint("endpoint1", weight=1),
+        DummyEndpoint("endpoint2", weight=1),
+        DummyEndpoint("endpoint3", weight=1)
+    ]
     lb = MockLoadBalancer(dummy_endpoints)
     await lb.start(port)
     try:
@@ -230,3 +255,45 @@ async def test_all_endpoints_unhealthy(load_balancer):
 
     total_requests = sum(endpoint.request_count for endpoint in endpoints)
     assert total_requests > 0, "Requests should be processed even when all endpoints are unhealthy"
+
+
+@pytest.mark.asyncio
+async def test_path_specific_routing(load_balancer):
+    lb, endpoints, port = load_balancer
+
+    lb.path_routes = {
+        '/v1/tokenize': 2,
+        '/v1/detokenize': 2
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f'http://localhost:{port}/v1/tokenize') as resp:
+            assert resp.status == 200
+
+        async with session.post(f'http://localhost:{port}/v1/detokenize') as resp:
+            assert resp.status == 200
+
+        async with session.get(f'http://localhost:{port}/v1/models') as resp:
+            assert resp.status == 200
+
+    assert endpoints[2].request_count == 2, "Path-specific endpoint should receive tokenize/detokenize requests"
+    assert endpoints[0].request_count + endpoints[1].request_count == 1, "Regular requests should use normal distribution"
+
+@pytest.mark.asyncio
+async def test_path_routing_with_unhealthy_endpoint(load_balancer):
+    lb, endpoints, port = load_balancer
+
+    lb.path_routes = {
+        '/v1/tokenize': 2,
+        '/v1/detokenize': 2
+    }
+
+    endpoints[2].is_healthy = False
+    await asyncio.sleep(2)
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f'http://localhost:{port}/v1/tokenize') as resp:
+            assert resp.status == 200
+
+    assert endpoints[2].request_count == 0, "Unhealthy endpoint should receive no requests"
+    assert endpoints[0].request_count + endpoints[1].request_count == 1, "Requests should fall back to healthy endpoints"
