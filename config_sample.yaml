@@ -1,0 +1,6 @@
+endpoints:
+  - url: "http://localhost:2242"
+    weight: 1
+  - url: "http://localhost:2243"
+    weight: 2
+port: 2222
