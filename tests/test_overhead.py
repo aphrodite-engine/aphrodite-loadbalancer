@@ -2,14 +2,17 @@ import asyncio
 import json
 import statistics
 import time
-from typing import Dict, List
+from typing import Dict
+from typing import List
 
 import aiohttp
 import pytest
 import pytest_asyncio
 from aiohttp import web
 
-from .test_loadbalancer import DummyEndpoint, MockLoadBalancer, get_free_port
+from .test_loadbalancer import DummyEndpoint
+from .test_loadbalancer import MockLoadBalancer
+from .test_loadbalancer import get_free_port
 
 
 class StreamingDummyEndpoint(DummyEndpoint):
@@ -27,8 +30,9 @@ class StreamingDummyEndpoint(DummyEndpoint):
         for chunk in chunks:
             if self.chunk_delay_ms:
                 await asyncio.sleep(self.chunk_delay_ms / 1000)
-            response_chunks.append(json.dumps(chunk).encode() + b"\n")
+            response_chunks.append(json.dumps(chunk).encode() + b'\n')
         return response_chunks
+
 
 class StreamingMockLoadBalancer(MockLoadBalancer):
     async def handle_request(self, request: web.Request) -> web.StreamResponse:
@@ -57,12 +61,19 @@ class StreamingMockLoadBalancer(MockLoadBalancer):
                 headers={
                     **cors_headers,
                     'Content-Type': 'text/event-stream',
-                }
+                },
             )
             await response.prepare(request)
 
             chunks = [
-                {"id": "chatcmpl-123", "object": "chat.completion.chunk", "choices": [{"delta": {"content": word}} for word in "This is a test response".split()]}
+                {
+                    'id': 'chatcmpl-123',
+                    'object': 'chat.completion.chunk',
+                    'choices': [
+                        {'delta': {'content': word}}
+                        for word in 'This is a test response'.split()
+                    ],
+                }
                 for _ in range(20)
             ]
 
@@ -75,20 +86,20 @@ class StreamingMockLoadBalancer(MockLoadBalancer):
                 return response
 
             except Exception as e:
-                print(f"Streaming error: {str(e)}")
+                print(f'Streaming error: {str(e)}')
                 raise
 
         return web.Response(
-            text=f"Response from {endpoint.name}",
-            headers=cors_headers
+            text=f'Response from {endpoint.name}', headers=cors_headers
         )
+
 
 @pytest_asyncio.fixture
 async def streaming_load_balancer():
     port = get_free_port()
     endpoints = [
-        StreamingDummyEndpoint("fast", latency_ms=10, chunk_delay_ms=5),
-        StreamingDummyEndpoint("slow", latency_ms=50, chunk_delay_ms=10)
+        StreamingDummyEndpoint('fast', latency_ms=10, chunk_delay_ms=5),
+        StreamingDummyEndpoint('slow', latency_ms=50, chunk_delay_ms=10),
     ]
     lb = StreamingMockLoadBalancer(endpoints)
     await lb.start(port)
@@ -96,6 +107,7 @@ async def streaming_load_balancer():
         yield lb, endpoints, port
     finally:
         await lb.cleanup()
+
 
 @pytest.mark.asyncio
 async def test_streaming_performance(streaming_load_balancer):
@@ -107,10 +119,10 @@ async def test_streaming_performance(streaming_load_balancer):
             task = session.post(
                 f'http://localhost:{port}/v1/completions',
                 json={
-                    "model": "test-model",
-                    "messages": [{"role": "user", "content": "Hello"}],
-                    "stream": True
-                }
+                    'model': 'test-model',
+                    'messages': [{'role': 'user', 'content': 'Hello'}],
+                    'stream': True,
+                },
             )
             tasks.append(task)
 
@@ -130,7 +142,7 @@ async def test_streaming_performance(streaming_load_balancer):
         for endpoint in endpoints:
             times = endpoint.processing_times
             if not times:
-                print(f"\nEndpoint {endpoint.name} had no requests")
+                print(f'\nEndpoint {endpoint.name} had no requests')
                 continue
 
             stats = {
@@ -138,20 +150,23 @@ async def test_streaming_performance(streaming_load_balancer):
                 'max': max(times) * 1000,
                 'mean': statistics.mean(times) * 1000,
                 'median': statistics.median(times) * 1000,
-                'stdev': statistics.stdev(times) * 1000 if len(times) > 1 else 0
+                'stdev': statistics.stdev(times) * 1000
+                if len(times) > 1
+                else 0,
             }
-            print(f"\nEndpoint {endpoint.name} statistics (ms):")
+            print(f'\nEndpoint {endpoint.name} statistics (ms):')
             for key, value in stats.items():
-                print(f"{key}: {value:.2f}")
+                print(f'{key}: {value:.2f}')
 
-        print("\nOverall performance:")
-        print(f"Total time: {total_time:.2f} seconds")
-        print(f"Requests per second: {requests_per_second:.2f}")
+        print('\nOverall performance:')
+        print(f'Total time: {total_time:.2f} seconds')
+        print(f'Requests per second: {requests_per_second:.2f}')
 
         assert requests_per_second > 10
         for endpoint in endpoints:
             if endpoint.processing_times:
                 assert statistics.mean(endpoint.processing_times) < 1.0
+
 
 @pytest.mark.asyncio
 async def test_large_response_overhead(streaming_load_balancer):
@@ -160,11 +175,13 @@ async def test_large_response_overhead(streaming_load_balancer):
         large_response = await session.post(
             f'http://localhost:{port}/v1/completions',
             json={
-                "model": "test-model",
-                "messages": [{"role": "user", "content": "Generate a long response"}],
-                "max_tokens": 1000,
-                "stream": True
-            }
+                'model': 'test-model',
+                'messages': [
+                    {'role': 'user', 'content': 'Generate a long response'}
+                ],
+                'max_tokens': 1000,
+                'stream': True,
+            },
         )
 
         assert large_response.status == 200
@@ -174,9 +191,11 @@ async def test_large_response_overhead(streaming_load_balancer):
         async for chunk in large_response.content:
             chunk_times.append(time.perf_counter() - start_time)
 
-        intervals = [t2 - t1 for t1, t2 in zip(chunk_times[:-1], chunk_times[1:])]
+        intervals = [
+            t2 - t1 for t1, t2 in zip(chunk_times[:-1], chunk_times[1:])
+        ]
         if intervals:
-            print("\nChunk delivery statistics (ms):")
-            print(f"Average interval: {statistics.mean(intervals) * 1000:.2f}")
-            print(f"Max interval: {max(intervals) * 1000:.2f}")
+            print('\nChunk delivery statistics (ms):')
+            print(f'Average interval: {statistics.mean(intervals) * 1000:.2f}')
+            print(f'Max interval: {max(intervals) * 1000:.2f}')
             assert statistics.mean(intervals) < 0.1

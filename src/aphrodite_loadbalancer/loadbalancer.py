@@ -16,7 +16,7 @@ class LoadBalancer:
         self.endpoints = []
         self.weights = []
         self.path_routes = {}
-        
+
         for i, endpoint in enumerate(config['endpoints']):
             if isinstance(endpoint, dict):
                 self.endpoints.append(endpoint['url'])
@@ -42,8 +42,7 @@ class LoadBalancer:
         try:
             assert self.client_session is not None
             async with self.client_session.get(
-                f"{endpoint}/health",
-                timeout=self.health_check_timeout
+                f'{endpoint}/health', timeout=self.health_check_timeout
             ) as resp:
                 return resp.status == 200
         except Exception:
@@ -55,31 +54,32 @@ class LoadBalancer:
             for i, endpoint in enumerate(self.endpoints):
                 was_healthy = i not in self.unhealthy_endpoints
                 is_healthy = await self.health_check(endpoint)
-                
+
                 if not is_healthy and was_healthy:
-                    print(f"[Health] Endpoint {endpoint} is down")
+                    print(f'[Health] Endpoint {endpoint} is down')
                     self.unhealthy_endpoints.add(i)
                     self._create_weighted_cycles()
                 elif is_healthy and not was_healthy:
-                    print(f"[Health] Endpoint {endpoint} is back up")
+                    print(f'[Health] Endpoint {endpoint} is back up')
                     self.unhealthy_endpoints.remove(i)
                     self._create_weighted_cycles()
 
             await asyncio.sleep(self.health_check_interval)
 
     def _create_weighted_cycles(self):
-        """Create weighted index cycles for load balancing, excluding unhealthy endpoints"""
+        """Create weighted index cycles for load balancing, excluding unhealthy
+        endpoints"""
         weighted_indices = []
         for i, weight in enumerate(self.weights):
             if i not in self.unhealthy_endpoints:
                 weighted_indices.extend([i] * weight)
 
         if not weighted_indices:
-            print("WARNING: All endpoints are unhealthy!")
+            print('WARNING: All endpoints are unhealthy!')
             weighted_indices = list(range(len(self.endpoints)))
-            
+
         random.shuffle(weighted_indices)
-        
+
         self.completion_cycle = cycle(weighted_indices.copy())
         self.general_cycle = cycle(weighted_indices.copy())
 
@@ -94,10 +94,12 @@ class LoadBalancer:
         await runner.setup()
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
-        print(f"Load balancer running on http://0.0.0.0:{port}")
+        print(f'Load balancer running on http://0.0.0.0:{port}')
 
-        for i, (endpoint, weight) in enumerate(zip(self.endpoints, self.weights)):
-            print(f"Endpoint {i}: {endpoint} (weight: {weight})")
+        for i, (endpoint, weight) in enumerate(
+            zip(self.endpoints, self.weights)
+        ):
+            print(f'Endpoint {i}: {endpoint} (weight: {weight})')
 
     async def handle_request(self, request: web.Request) -> web.StreamResponse:
         cors_headers = {
@@ -122,7 +124,7 @@ class LoadBalancer:
 
         path = request.path
         if request.query_string:
-            path += f"?{request.query_string}"
+            path += f'?{request.query_string}'
         target_url = f"{target_url.rstrip('/')}/{path.lstrip('/')}"
 
         try:
@@ -133,12 +135,10 @@ class LoadBalancer:
                 headers=request.headers,
                 data=request.content,
                 allow_redirects=False,
-                timeout=aiohttp.ClientTimeout(total=30)
+                timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
-
                 response = web.StreamResponse(
-                    status=resp.status,
-                    headers={**resp.headers, **cors_headers}
+                    status=resp.status, headers={**resp.headers, **cors_headers}
                 )
                 await response.prepare(request)
 
@@ -149,7 +149,7 @@ class LoadBalancer:
                 return response
 
         except Exception as e:
-            print(f"Request failed: {str(e)}")
+            print(f'Request failed: {str(e)}')
             raise
 
     async def cleanup(self):

@@ -14,9 +14,12 @@ from aphrodite_loadbalancer.loadbalancer import LoadBalancer
 
 def create_test_config(endpoints):
     config = {'endpoints': endpoints}
-    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml') as f:
+    with tempfile.NamedTemporaryFile(
+        mode='w', delete=False, suffix='.yaml'
+    ) as f:
         yaml.dump(config, f)
         return f.name
+
 
 class DummyEndpoint:
     def __init__(self, name, weight=1):
@@ -27,9 +30,10 @@ class DummyEndpoint:
         self.should_fail = False
         self.is_healthy = True
 
+
 class MockLoadBalancer(LoadBalancer):
     def __init__(self, endpoints):
-        self.endpoints = [f"http://dummy{i}" for i in range(len(endpoints))]
+        self.endpoints = [f'http://dummy{i}' for i in range(len(endpoints))]
         self.dummy_endpoints = endpoints
         self.weights = [endpoint.weight for endpoint in endpoints]
         self.path_routes = {}
@@ -41,14 +45,15 @@ class MockLoadBalancer(LoadBalancer):
         self._create_weighted_cycles()
 
     def _create_weighted_cycles(self):
-        """Create weighted index cycles for load balancing, excluding unhealthy endpoints"""
+        """Create weighted index cycles for load balancing, excluding unhealthy
+        endpoints"""
         weighted_indices = []
         for i, weight in enumerate(self.weights[:2]):
             if i not in self.unhealthy_endpoints:
                 weighted_indices.extend([i] * weight)
 
         if not weighted_indices:
-            print("WARNING: All endpoints are unhealthy!")
+            print('WARNING: All endpoints are unhealthy!')
             weighted_indices = list(range(min(2, len(self.endpoints))))
 
         self.completion_cycle = cycle(weighted_indices)
@@ -79,24 +84,22 @@ class MockLoadBalancer(LoadBalancer):
         endpoint.last_request = {
             'method': request.method,
             'path': request.path,
-            'query': request.query_string
+            'query': request.query_string,
         }
 
         if endpoint.should_fail:
             return web.Response(
-                status=500,
-                text="Simulated failure",
-                headers=cors_headers
+                status=500, text='Simulated failure', headers=cors_headers
             )
 
         return web.Response(
-            text=f"Response from {endpoint.name}",
-            headers=cors_headers
+            text=f'Response from {endpoint.name}', headers=cors_headers
         )
 
     async def health_check(self, endpoint: str) -> bool:
         index = self.endpoints.index(endpoint)
         return self.dummy_endpoints[index].is_healthy
+
 
 def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -105,13 +108,14 @@ def get_free_port():
         port = s.getsockname()[1]
     return port
 
+
 @pytest_asyncio.fixture
 async def load_balancer():
     port = get_free_port()
     dummy_endpoints = [
-        DummyEndpoint("endpoint1", weight=1),
-        DummyEndpoint("endpoint2", weight=1),
-        DummyEndpoint("endpoint3", weight=1)
+        DummyEndpoint('endpoint1', weight=1),
+        DummyEndpoint('endpoint2', weight=1),
+        DummyEndpoint('endpoint3', weight=1),
     ]
     lb = MockLoadBalancer(dummy_endpoints)
     await lb.start(port)
@@ -120,47 +124,62 @@ async def load_balancer():
     finally:
         await lb.cleanup()
 
+
 @pytest.mark.asyncio
 async def test_round_robin_distribution(load_balancer):
     lb, endpoints, port = load_balancer
     async with aiohttp.ClientSession() as session:
         for i in range(4):
-            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+            async with session.get(
+                f'http://localhost:{port}/v1/models'
+            ) as resp:
                 assert resp.status == 200
 
         assert endpoints[0].request_count == 2
         assert endpoints[1].request_count == 2
+
 
 @pytest.mark.asyncio
 async def test_separate_completion_routing(load_balancer):
     lb, endpoints, port = load_balancer
     async with aiohttp.ClientSession() as session:
         for i in range(2):
-            async with session.post(f'http://localhost:{port}/v1/completions') as resp:
+            async with session.post(
+                f'http://localhost:{port}/v1/completions'
+            ) as resp:
                 assert resp.status == 200
 
         for i in range(2):
-            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+            async with session.get(
+                f'http://localhost:{port}/v1/models'
+            ) as resp:
                 assert resp.status == 200
 
         assert endpoints[0].request_count == 2
         assert endpoints[1].request_count == 2
 
+
 @pytest.mark.asyncio
 async def test_cors_headers(load_balancer):
     lb, endpoints, port = load_balancer
     async with aiohttp.ClientSession() as session:
-        async with session.options(f'http://localhost:{port}/v1/models') as resp:
+        async with session.options(
+            f'http://localhost:{port}/v1/models'
+        ) as resp:
             assert resp.status == 200
             assert 'Access-Control-Allow-Origin' in resp.headers
             assert resp.headers['Access-Control-Allow-Origin'] == '*'
+
 
 @pytest.mark.asyncio
 async def test_query_params_forwarding(load_balancer):
     lb, endpoints, port = load_balancer
     async with aiohttp.ClientSession() as session:
-        async with session.get(f'http://localhost:{port}/v1/models?version=1') as resp:
+        async with session.get(
+            f'http://localhost:{port}/v1/models?version=1'
+        ) as resp:
             assert resp.status == 200
+
 
 @pytest.mark.asyncio
 async def test_error_handling(load_balancer):
@@ -183,15 +202,20 @@ async def test_weighted_distribution(load_balancer):
     async with aiohttp.ClientSession() as session:
         num_requests = 100
         for _ in range(num_requests):
-            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+            async with session.get(
+                f'http://localhost:{port}/v1/models'
+            ) as resp:
                 assert resp.status == 200
 
         total_requests = endpoints[0].request_count + endpoints[1].request_count
-        weight_ratio = endpoints[0].weight / (endpoints[0].weight + endpoints[1].weight)
+        weight_ratio = endpoints[0].weight / (
+            endpoints[0].weight + endpoints[1].weight
+        )
         actual_ratio = endpoints[0].request_count / total_requests
 
-        assert abs(actual_ratio - weight_ratio) < 0.1, \
-            f"Expected ratio around {weight_ratio}, got {actual_ratio}"
+        assert (
+            abs(actual_ratio - weight_ratio) < 0.1
+        ), f'Expected ratio around {weight_ratio}, got {actual_ratio}'
 
 
 @pytest.mark.asyncio
@@ -204,12 +228,19 @@ async def test_health_check_unhealthy_endpoint(load_balancer):
 
     async with aiohttp.ClientSession() as session:
         for _ in range(5):
-            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+            async with session.get(
+                f'http://localhost:{port}/v1/models'
+            ) as resp:
                 assert resp.status == 200
                 await resp.text()
 
-    assert endpoints[0].request_count == 0, "Unhealthy endpoint should receive no requests"
-    assert endpoints[1].request_count == 5, "All requests should go to healthy endpoint"
+    assert (
+        endpoints[0].request_count == 0
+    ), 'Unhealthy endpoint should receive no requests'
+    assert (
+        endpoints[1].request_count == 5
+    ), 'All requests should go to healthy endpoint'
+
 
 @pytest.mark.asyncio
 async def test_health_check_recovery(load_balancer):
@@ -220,7 +251,9 @@ async def test_health_check_recovery(load_balancer):
 
     async with aiohttp.ClientSession() as session:
         for _ in range(3):
-            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+            async with session.get(
+                f'http://localhost:{port}/v1/models'
+            ) as resp:
                 assert resp.status == 200
                 await resp.text()
 
@@ -232,12 +265,19 @@ async def test_health_check_recovery(load_balancer):
 
     async with aiohttp.ClientSession() as session:
         for _ in range(4):
-            async with session.get(f'http://localhost:{port}/v1/models') as resp:
+            async with session.get(
+                f'http://localhost:{port}/v1/models'
+            ) as resp:
                 assert resp.status == 200
                 await resp.text()
 
-    assert endpoints[0].request_count > 0, "Recovered endpoint should receive requests"
-    assert endpoints[1].request_count > 0, "Previously healthy endpoint should still receive requests"
+    assert (
+        endpoints[0].request_count > 0
+    ), 'Recovered endpoint should receive requests'
+    assert (
+        endpoints[1].request_count > 0
+    ), 'Previously healthy endpoint should still receive requests'
+
 
 @pytest.mark.asyncio
 async def test_all_endpoints_unhealthy(load_balancer):
@@ -245,7 +285,7 @@ async def test_all_endpoints_unhealthy(load_balancer):
 
     for endpoint in endpoints:
         endpoint.is_healthy = False
-    
+
     await asyncio.sleep(2)
 
     async with aiohttp.ClientSession() as session:
@@ -254,46 +294,53 @@ async def test_all_endpoints_unhealthy(load_balancer):
             await resp.text()
 
     total_requests = sum(endpoint.request_count for endpoint in endpoints)
-    assert total_requests > 0, "Requests should be processed even when all endpoints are unhealthy"
+    assert (
+        total_requests > 0
+    ), 'Requests should be processed even when all endpoints are unhealthy'
 
 
 @pytest.mark.asyncio
 async def test_path_specific_routing(load_balancer):
     lb, endpoints, port = load_balancer
 
-    lb.path_routes = {
-        '/v1/tokenize': 2,
-        '/v1/detokenize': 2
-    }
+    lb.path_routes = {'/v1/tokenize': 2, '/v1/detokenize': 2}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(f'http://localhost:{port}/v1/tokenize') as resp:
             assert resp.status == 200
 
-        async with session.post(f'http://localhost:{port}/v1/detokenize') as resp:
+        async with session.post(
+            f'http://localhost:{port}/v1/detokenize'
+        ) as resp:
             assert resp.status == 200
 
         async with session.get(f'http://localhost:{port}/v1/models') as resp:
             assert resp.status == 200
 
-    assert endpoints[2].request_count == 2, "Path-specific endpoint should receive tokenize/detokenize requests"
-    assert endpoints[0].request_count + endpoints[1].request_count == 1, "Regular requests should use normal distribution"
+    assert (
+        endpoints[2].request_count == 2
+    ), 'Path-specific endpoint should receive tokenize/detokenize requests'
+    assert (
+        endpoints[0].request_count + endpoints[1].request_count == 1
+    ), 'Regular requests should use normal distribution'
+
 
 @pytest.mark.asyncio
 async def test_path_routing_with_unhealthy_endpoint(load_balancer):
     lb, endpoints, port = load_balancer
 
-    lb.path_routes = {
-        '/v1/tokenize': 2,
-        '/v1/detokenize': 2
-    }
+    lb.path_routes = {'/v1/tokenize': 2, '/v1/detokenize': 2}
 
     endpoints[2].is_healthy = False
     await asyncio.sleep(2)
-    
+
     async with aiohttp.ClientSession() as session:
         async with session.post(f'http://localhost:{port}/v1/tokenize') as resp:
             assert resp.status == 200
 
-    assert endpoints[2].request_count == 0, "Unhealthy endpoint should receive no requests"
-    assert endpoints[0].request_count + endpoints[1].request_count == 1, "Requests should fall back to healthy endpoints"
+    assert (
+        endpoints[2].request_count == 0
+    ), 'Unhealthy endpoint should receive no requests'
+    assert (
+        endpoints[0].request_count + endpoints[1].request_count == 1
+    ), 'Requests should fall back to healthy endpoints'
