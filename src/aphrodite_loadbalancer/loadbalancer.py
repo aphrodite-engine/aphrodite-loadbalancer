@@ -1,8 +1,10 @@
+import asyncio
+from itertools import cycle
+
 import aiohttp
 import yaml
-import asyncio
 from aiohttp import web
-from itertools import cycle
+
 
 class LoadBalancer:
     def __init__(self, config_path: str):
@@ -10,6 +12,7 @@ class LoadBalancer:
             config = yaml.safe_load(f)
             
         self.endpoints = config['endpoints']
+        self.port = config.get('port', 8080)
         self.request_count = 0
         self.endpoint_cycle = cycle(range(len(self.endpoints)))
         self.client_session = None
@@ -78,16 +81,3 @@ class LoadBalancer:
     async def cleanup(self):
         if self.client_session:
             await self.client_session.close()
-
-async def main():
-    balancer = LoadBalancer('config.yaml')
-    await balancer.start(8080)
-    
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    finally:
-        await balancer.cleanup()
-
-if __name__ == '__main__':
-    asyncio.run(main())
