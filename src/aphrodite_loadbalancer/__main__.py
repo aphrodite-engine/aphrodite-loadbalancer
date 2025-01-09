@@ -1,12 +1,21 @@
 import asyncio
 import sys
 
+from loguru import logger
+
 from .loadbalancer import LoadBalancer
+
+
+logger.remove()
+logger.add(
+    sys.stderr,
+    format="<green>{time:HH:mm:ss}</green> | <level>{message}</level>",
+)
 
 
 def main():
     if len(sys.argv) != 2:
-        print('Usage: aphrodite-loadbalancer <config.yaml>')
+        logger.error('Usage: aphrodite-loadbalancer <config.yaml>')
         sys.exit(1)
 
     config_path = sys.argv[1]
@@ -21,7 +30,7 @@ async def async_main(config_path: str):
         while True:
             await asyncio.sleep(3600)
     except KeyboardInterrupt:
-        print('\nShutting down...')
+        logger.info('\nShutting down...')
     finally:
         await balancer.cleanup()
 

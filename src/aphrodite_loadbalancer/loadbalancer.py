@@ -6,6 +6,7 @@ from typing import Set
 import aiohttp
 import yaml
 from aiohttp import web
+from loguru import logger
 
 
 class LoadBalancer:
@@ -56,11 +57,11 @@ class LoadBalancer:
                 is_healthy = await self.health_check(endpoint)
 
                 if not is_healthy and was_healthy:
-                    print(f'[Health] Endpoint {endpoint} is down')
+                    logger.warning(f'Endpoint {endpoint} is down')
                     self.unhealthy_endpoints.add(i)
                     self._create_weighted_cycles()
                 elif is_healthy and not was_healthy:
-                    print(f'[Health] Endpoint {endpoint} is back up')
+                    logger.info(f'Endpoint {endpoint} is back up')
                     self.unhealthy_endpoints.remove(i)
                     self._create_weighted_cycles()
 
@@ -75,7 +76,7 @@ class LoadBalancer:
                 weighted_indices.extend([i] * weight)
 
         if not weighted_indices:
-            print('WARNING: All endpoints are unhealthy!')
+            logger.critical('All endpoints are unhealthy!')
             weighted_indices = list(range(len(self.endpoints)))
 
         random.shuffle(weighted_indices)
@@ -94,12 +95,12 @@ class LoadBalancer:
         await runner.setup()
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
-        print(f'Load balancer running on http://0.0.0.0:{port}')
+        logger.info(f'Load balancer running on http://0.0.0.0:{port}')
 
         for i, (endpoint, weight) in enumerate(
             zip(self.endpoints, self.weights)
         ):
-            print(f'Endpoint {i}: {endpoint} (weight: {weight})')
+            logger.info(f'Endpoint {i}: {endpoint} (weight: {weight})')
 
     async def handle_request(self, request: web.Request) -> web.StreamResponse:
         cors_headers = {
@@ -126,6 +127,10 @@ class LoadBalancer:
         if request.query_string:
             path += f'?{request.query_string}'
         target_url = f"{target_url.rstrip('/')}/{path.lstrip('/')}"
+        
+        logger.info(
+            f"Routing {request.method} {path} to endpoint "
+            f"{endpoint_index}: {target_url}")
 
         try:
             assert self.client_session is not None
@@ -149,7 +154,7 @@ class LoadBalancer:
                 return response
 
         except Exception as e:
-            print(f'Request failed: {str(e)}')
+            logger.error(f'Request failed: {str(e)}')
             raise
 
     async def cleanup(self):
